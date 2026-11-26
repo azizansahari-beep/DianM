@@ -2902,8 +2902,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
 
     // Auto-apply any pending 'Dalam Penghantaran' restock orders into Stock units
-    (function autoApplyPendingRestocks() {
-      if (!Array.isArray(restockOrders) || restockOrders.length === 0) return;
+    function autoApplyPendingRestocks() {
+      if (!Array.isArray(restockOrders) || restockOrders.length === 0) return false;
       let changed = false;
       restockOrders.forEach(order => {
         if (order && order.status === 'Dalam Penghantaran') {
@@ -2930,7 +2930,9 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         saveData(INVENTORY_STORAGE_KEY, inventory);
         saveData(RESTOCK_ORDERS_KEY, restockOrders);
       }
-    })();
+      return changed;
+    }
+    autoApplyPendingRestocks();
 
     function getPendingIncomingByProduct() {
       const incoming = {};
@@ -6797,7 +6799,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     } else {
       packagingInventory = DEFAULT_PACKAGING.map(def => {
         const saved = packagingInventory.find(s => s.id === def.id);
-        return saved ? Object.assign({}, def, { stock: Number(saved.stock ?? def.stock), minStock: Number(saved.minStock ?? def.minStock) }) : JSON.parse(JSON.stringify(def));
+        return saved ? Object.assign({}, def, { stock: Number(saved.stock ?? def.stock), minStock: Number(saved.minStock ?? def.minStock), costPrice: Number(saved.costPrice || 0), costBatches: Array.isArray(saved.costBatches) ? saved.costBatches : [] }) : JSON.parse(JSON.stringify(def));
       });
     }
     stockLogs = loadData(STOCK_LOGS_KEY, []);
@@ -7601,6 +7603,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         if (Array.isArray(data.diaryEntries)) { diaryEntries = data.diaryEntries; saveData(DIARY_STORAGE_KEY, diaryEntries, true); }
         if (data.agentProfile && data.agentProfile.name) { agentProfile = data.agentProfile; saveData(PROFILE_STORAGE_KEY, agentProfile, true); applyAgentProfile(); }
         try { localStorage.setItem(CLOUD_LAST_MOD_KEY, String(cloudTs || Date.now())); } catch (e) {}
+        if (typeof autoApplyPendingRestocks === 'function') autoApplyPendingRestocks();
         renderAll();
         if (!silent) {
           showCloudMsg('Semua data berjaya dipulihkan daripada Cloud untuk ID: ' + agentId, false);
