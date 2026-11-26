@@ -6308,6 +6308,16 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     });
 
 
+    function syncExpConfirmBtnLabel() {
+      const btn = document.getElementById('expConfirmSelectedBtn');
+      if (!btn) return;
+      const isRestock = (document.getElementById('expSourceMode') && document.getElementById('expSourceMode').value) === 'restock';
+      if (appLang === 'en') {
+        btn.textContent = isRestock ? 'Record Restock & Add Stock' : 'Record Agent Purchase & Deduct Stock';
+      } else {
+        btn.textContent = isRestock ? 'Rekod Restock & Tambah Stok' : 'Rekod Agent Beli & Tolak Stok';
+      }
+    }
     document.querySelectorAll('.exp-source-btn').forEach(btn => {
       btn.addEventListener('click', function () {
         const src = this.getAttribute('data-exp-source');
@@ -6319,6 +6329,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
             ? 'exp-source-btn py-2 px-3 rounded-xl text-xs font-bold bg-[#1A2948] text-white transition'
             : 'exp-source-btn py-2 px-3 rounded-xl text-xs font-bold bg-[#EDF2FA] text-[#1A2948] hover:bg-[#DCE5F5] transition';
         });
+        syncExpConfirmBtnLabel();
+        if (typeof updateExpensesTotals === 'function') updateExpensesTotals();
       });
     });
 
@@ -6375,8 +6387,9 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         const sub = qty * unitPrice;
         const imgSrc = HUB_IMAGES[c.imageKey] || HUB_IMAGES.exp_perfume;
         const pkgItem = packagingInventory.find(pk => pk.id === c.id);
+        const isRestockSrc = (document.getElementById('expSourceMode') && document.getElementById('expSourceMode').value) === 'restock';
         const topBadge = pkgItem
-          ? (qty > 0 ? `Stok ${Number(pkgItem.stock) || 0}→${(Number(pkgItem.stock) || 0) + qty}` : `Stok ${Number(pkgItem.stock) || 0}`)
+          ? (qty > 0 ? `Stok ${Number(pkgItem.stock) || 0}→${isRestockSrc ? (Number(pkgItem.stock) || 0) + qty : Math.max(0, (Number(pkgItem.stock) || 0) - qty)}` : `Stok ${Number(pkgItem.stock) || 0}`)
           : '1 pcs';
 
         const moqRow = c.moqOptions
@@ -6454,6 +6467,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       shell.innerHTML = `<div class="carousel-pills">${pillsHtml}</div><div class="carousel-track">${fixedCardsHtml}${customCardHtml}</div>`;
       bindCarouselShell(shell);
       updateExpensesTotals();
+      if (typeof syncExpConfirmBtnLabel === 'function') syncExpConfirmBtnLabel();
     }
 
     function updateExpensesTotals() {
@@ -6488,7 +6502,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         const topBadgeEl = document.querySelector(`[data-exp-topbadge="${c.id}"]`);
         if (topBadgeEl && pkgItem) {
           const curPkg = Number(pkgItem.stock) || 0;
-          topBadgeEl.textContent = qty > 0 ? `Stok ${curPkg}→${curPkg + qty}` : `Stok ${curPkg}`;
+          const isRestockSrc = (document.getElementById('expSourceMode') && document.getElementById('expSourceMode').value) === 'restock';
+          topBadgeEl.textContent = qty > 0 ? `Stok ${curPkg}→${isRestockSrc ? curPkg + qty : Math.max(0, curPkg - qty)}` : `Stok ${curPkg}`;
         }
         const badgeEl = document.querySelector(`[data-pill-badge-exp="${c.id}"]`);
         if (badgeEl) { badgeEl.textContent = qty; badgeEl.classList.toggle('hidden', qty === 0); }
@@ -6534,8 +6549,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
             showToast('Sila isi nama item dan jumlah RM yang sah.');
             return;
           }
-          const expSrc = (document.getElementById('expSourceMode') && document.getElementById('expSourceMode').value) === 'restock' ? 'Restock' : 'Agent Beli';
-          financeLogs.unshift({ id: 'f_' + Date.now(), type: 'Perbelanjaan', desc: `[${expSrc}] ${desc}`, amount, date });
+          const isRestockSrc = (document.getElementById('expSourceMode') && document.getElementById('expSourceMode').value) === 'restock';
+          const expSrc = isRestockSrc ? 'Restock' : 'Agent Beli';
+          const finType = isRestockSrc ? 'Perbelanjaan' : 'Jualan';
+          financeLogs.unshift({ id: 'f_' + Date.now(), type: finType, desc: `[${expSrc}] ${desc}`, amount, date });
           saveData(FINANCE_STORAGE_KEY, financeLogs);
           renderFinance();
           renderDashboard();
@@ -6560,14 +6577,17 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
           return;
         }
         const date = (document.getElementById('expLogDate') && document.getElementById('expLogDate').value) || new Date().toISOString().slice(0, 10);
-        const expSrc = (document.getElementById('expSourceMode') && document.getElementById('expSourceMode').value) === 'restock' ? 'Restock' : 'Agent Beli';
+        const isRestockSrc = (document.getElementById('expSourceMode') && document.getElementById('expSourceMode').value) === 'restock';
+        const expSrc = isRestockSrc ? 'Restock' : 'Agent Beli';
+        const finType = isRestockSrc ? 'Perbelanjaan' : 'Jualan';
         lines.forEach((l, idx) => {
-          financeLogs.unshift({ id: 'f_' + (Date.now() + idx), type: 'Perbelanjaan', desc: `[${expSrc}] ${l.desc}`, amount: l.amount, date });
+          financeLogs.unshift({ id: 'f_' + (Date.now() + idx), type: finType, desc: `[${expSrc}] ${l.desc}`, amount: l.amount, date });
           const pkg = packagingInventory.find(pk => pk.id === l.id);
           if (pkg && l.pcs > 0) {
             const before = Number(pkg.stock) || 0;
-            pkg.stock = before + l.pcs;
-            recordStockMovement(pkg.id, expSrc, l.pcs, before, pkg.stock, l.desc, date);
+            const delta = isRestockSrc ? l.pcs : -l.pcs;
+            pkg.stock = Math.max(0, before + delta);
+            recordStockMovement(pkg.id, expSrc, delta, before, pkg.stock, l.desc, date);
           }
         });
         saveData(PACKAGING_STORAGE_KEY, packagingInventory);
@@ -8900,6 +8920,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       qLangBtn.addEventListener('click', function () {
         applyLanguage(appLang === 'en' ? 'ms' : 'en');
         syncQuickLangBadge();
+      if (typeof syncExpConfirmBtnLabel === 'function') syncExpConfirmBtnLabel();
       });
     }
 
