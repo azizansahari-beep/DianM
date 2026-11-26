@@ -2932,7 +2932,6 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       }
       return changed;
     }
-    autoApplyPendingRestocks();
 
     function getPendingIncomingByProduct() {
       const incoming = {};
@@ -7055,6 +7054,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     });
 
     restockOrders = loadData(RESTOCK_ORDERS_KEY, []);
+    if (typeof autoApplyPendingRestocks === 'function') autoApplyPendingRestocks();
     diaryEntries = loadData(DIARY_STORAGE_KEY, [
       {
         id: 'dy_welcome',
