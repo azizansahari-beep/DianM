@@ -3964,7 +3964,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
           const matched = contacts.find(c => (c.name || '').toLowerCase() === (i.contactName || '').toLowerCase());
           const dDate = i.deliveryDate || i.date || '-';
           const phone = i.contactPhone || (matched && matched.contact) || '';
-          const loc = i.deliveryLocation || '';
+          const loc = i.deliveryLocation || (matched && matched.note) || '';
           return {
             inv: i,
             id: i.id,
@@ -3997,7 +3997,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         return `${idx + 1}. [${r.dDate} | ${r.dMethod}]\n` +
           `Nama: ${r.name}\n` +
           `No. Phone: ${r.phone || '-'}\n` +
-          `Lokasi: ${r.loc || '-'}\n` +
+          `Alamat / Lokasi: ${r.loc || '-'}\n` +
           `${itemStr}\n` +
           `Jumlah: ${formatRM(r.inv.total)}`;
       });
@@ -4068,8 +4068,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
                   <span class="text-[11px] font-semibold text-[#4A6294]">${escapeHtml(r.dDate)}</span>
                   ${isDone ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-[#DCE5F5] text-[#1A2948]">Sudah Hantar</span>' : ''}
                 </div>
-                <p class="text-[11px] text-[#1A2948]"><span class="text-[#4A6294]">No. Phone:</span> ${escapeHtml(r.phone || '-')}</p>
-                <p class="text-[11px] text-[#1A2948]"><span class="text-[#4A6294]">Lokasi:</span> ${escapeHtml(r.loc || '-')}</p>
+                <p class="text-[11px] text-[#1A2948]"><span class="text-[#4A6294]">No. Phone:</span> <span class="font-semibold">${escapeHtml(r.phone || '-')}</span></p>
+                <p class="text-[11px] text-[#1A2948]"><span class="text-[#4A6294]">Alamat / Lokasi:</span> <span class="font-semibold">${escapeHtml(r.loc || '-')}</span></p>
                 <p class="text-[11px] text-[#4A6294]">${itemStr} · <strong class="text-[#1A2948]">${formatRM(r.inv.total)}</strong></p>
                 ${proofImg ? `<img src="${proofImg}" alt="Bukti ${escapeHtml(r.id)}" class="mt-1.5 w-16 h-16 object-cover rounded-xl border border-[#DCE5F5]" />` : ''}
               </div>
@@ -5864,6 +5864,27 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         return;
       }
       const summary = orderDesc.join(', ');
+      const orderDateOnly = (document.getElementById('restockOrderDate') && document.getElementById('restockOrderDate').value) || new Date().toISOString().slice(0, 10);
+      const fullDate = orderDateOnly + ' ' + new Date().toTimeString().slice(0, 5);
+
+      entries.forEach(([pid, qty]) => {
+        const prod = inventory.find(item => item.id === pid);
+        if (prod) {
+          const before = Number(prod.stock) || 0;
+          const addQ = Number(qty) || 0;
+          const unitCost = getUnitPriceForQty(prod, addQ, 'agent');
+          if (!Array.isArray(prod.costBatches)) prod.costBatches = [];
+          if (prod.costBatches.length === 0 && before > 0 && Number(prod.costPrice) > 0) {
+            prod.costBatches.push({ qty: before, costPrice: Number(prod.costPrice), date: '', source: 'Stok Asal' });
+          }
+          if (addQ > 0) {
+            prod.costBatches.push({ qty: addQ, costPrice: unitCost, date: orderDateOnly, source: 'Restock' });
+          }
+          prod.stock = before + addQ;
+          recordStockMovement(pid, 'Restock', addQ, before, prod.stock, `Restock (${deliveryMethod || 'COD'})`, fullDate, unitCost);
+        }
+      });
+
       restockOrders.unshift({
         id: 'ro_' + Date.now(),
         summary,
@@ -5871,21 +5892,24 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         deliveryMethod,
         deliveryFee,
         total: combinedTotal,
-        status: 'Dalam Penghantaran',
-        date: ((document.getElementById('restockOrderDate') && document.getElementById('restockOrderDate').value) || new Date().toISOString().slice(0, 10)) + ' ' + new Date().toTimeString().slice(0, 5)
+        status: 'Barang Sampai',
+        date: fullDate
       });
+      saveData(INVENTORY_STORAGE_KEY, inventory);
       saveData(RESTOCK_ORDERS_KEY, restockOrders);
 
       document.querySelectorAll('.loose-qty-input, .set-qty-input').forEach(i => { i.value = ''; });
       document.getElementById('restockDeliveryFee').value = '';
       renderInventory();
+      renderInvoiceBuilderOptions();
+      renderSalesOrderGrids();
       renderManualLooseGrid();
       renderRestockSetOrderGrid();
       renderConfirmedRestockHistory();
       renderRestockPlan();
       renderDashboard();
-      logDiaryActivity('Order Restock', `Order restock (${deliveryMethod}): ${summary} (${formatRM(combinedTotal)}) — Dalam Penghantaran.`, '');
-      showToast('Order restock direkodkan! Tekan "Barang Sampai" apabila stok tiba.');
+      logDiaryActivity('Order Restock', `Order restock (${deliveryMethod}): ${summary} (${formatRM(combinedTotal)}) — Masuk Stok.`, '');
+      showToast(appLang === 'en' ? 'Restock recorded & added to Stock!' : 'Order restock direkodkan & terus ditambah ke Stok!');
     }
     function buildRestockWhatsappText() {
       const { combinedTotal, deliveryMethod, deliveryFee, itemLines } = updateCombinedOrderTotals();
@@ -6266,8 +6290,31 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       });
     });
 
-    // Expenses Portrait Carousel + Custom Card
+    // Expenses Portrait Carousel + Custom Card (Tier-Based Per-Pcs Pricing Like Restock)
     const expSelectedMoq = { exp_perfume: 0, exp_ziplock: 0, exp_bubble: 0 };
+
+    function getExpenseTierInfo(card, qty) {
+      if (!card) return { unitPrice: 0, activeIdx: -1 };
+      if (!Array.isArray(card.moqOptions) || card.moqOptions.length === 0) {
+        return { unitPrice: Number(card.fixedPrice) || 0, activeIdx: -1 };
+      }
+      const q = Math.max(0, Number(qty) || 0);
+      const parsed = card.moqOptions.map((opt, idx) => {
+        const minQty = parseInt(opt.label, 10) || 1;
+        return { idx, minQty, unitPrice: Number(opt.price) / minQty };
+      }).sort((a, b) => a.minQty - b.minQty);
+      let chosen = parsed[0];
+      if (q > 0) {
+        for (let i = 0; i < parsed.length; i++) {
+          if (q >= parsed[i].minQty) chosen = parsed[i];
+        }
+      } else {
+        const selIdx = expSelectedMoq[card.id] || 0;
+        const found = parsed.find(p => p.idx === selIdx);
+        if (found) chosen = found;
+      }
+      return { unitPrice: chosen.unitPrice, activeIdx: chosen.idx };
+    }
 
     function renderExpensesCarousel() {
       const shell = document.getElementById('expensesCarouselShell');
@@ -6276,9 +6323,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       if (dateEl && !dateEl.value) dateEl.value = new Date().toISOString().slice(0, 10);
 
       const prevQty = {};
-      const prevCustomUnit = {};
       shell.querySelectorAll('input[data-exp-qty-id]').forEach(i => { prevQty[i.getAttribute('data-exp-qty-id')] = i.value; });
-      shell.querySelectorAll('input[data-exp-unit-id]').forEach(i => { prevCustomUnit[i.getAttribute('data-exp-unit-id')] = i.value; });
 
       const pillsHtml = [
         ...EXPENSES_CARDS.map((c, idx) => {
@@ -6294,25 +6339,24 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       const fixedCardsHtml = EXPENSES_CARDS.map(c => {
         const val = prevQty[c.id] !== undefined ? prevQty[c.id] : '';
         const qty = Math.max(0, parseInt(val, 10) || 0);
-        const moqIdx = expSelectedMoq[c.id] || 0;
-        const unitPrice = c.moqOptions
-          ? c.moqOptions[moqIdx].price
-          : (c.fixedPrice !== undefined ? c.fixedPrice : (prevCustomUnit[c.id] !== undefined ? Math.max(0, parseFloat(prevCustomUnit[c.id]) || 0) : (c.defaultUnitPrice || 0)));
+        const { unitPrice, activeIdx } = getExpenseTierInfo(c, qty);
         const sub = qty * unitPrice;
         const imgSrc = HUB_IMAGES[c.imageKey] || HUB_IMAGES.exp_perfume;
         const pkgItem = packagingInventory.find(pk => pk.id === c.id);
-        const packPcs = c.moqOptions ? (parseInt(c.moqOptions[moqIdx].label, 10) || 1) * qty : qty;
         const topBadge = pkgItem
-          ? (qty > 0 ? `Stok ${Number(pkgItem.stock) || 0}→${(Number(pkgItem.stock) || 0) + packPcs}` : `Stok ${Number(pkgItem.stock) || 0}`)
-          : (c.moqOptions ? c.moqOptions[moqIdx].label : '1 pcs');
+          ? (qty > 0 ? `Stok ${Number(pkgItem.stock) || 0}→${(Number(pkgItem.stock) || 0) + qty}` : `Stok ${Number(pkgItem.stock) || 0}`)
+          : '1 pcs';
 
         const moqRow = c.moqOptions
           ? `<div class="grid grid-cols-3 gap-1.5">
-              ${c.moqOptions.map((opt, idx) => `
-                <button type="button" data-exp-moq-card="${escapeHtml(c.id)}" data-exp-moq-idx="${idx}" class="py-1.5 px-1 rounded-lg text-[10px] font-bold transition ${idx === moqIdx ? 'bg-[#1A2948] text-white' : 'bg-[#EDF2FA] text-[#1A2948] hover:bg-[#DCE5F5]'}">
+              ${c.moqOptions.map((opt, idx) => {
+                const tQty = parseInt(opt.label, 10) || 1;
+                const isAct = qty > 0 ? idx === activeIdx : idx === (expSelectedMoq[c.id] || 0);
+                return `
+                <button type="button" data-exp-moq-card="${escapeHtml(c.id)}" data-exp-moq-idx="${idx}" data-tier-target=".exp-qty-input[data-exp-qty-id='${escapeHtml(c.id)}']" data-tier-qty="${tQty}" class="py-1.5 px-1 rounded-lg text-[10px] font-bold transition ${isAct ? 'bg-[#1A2948] text-white' : 'bg-[#EDF2FA] text-[#1A2948] hover:bg-[#DCE5F5]'}">
                   ${escapeHtml(opt.label)}<br/>RM${opt.price}
-                </button>
-              `).join('')}
+                </button>`;
+              }).join('')}
             </div>`
           : '';
 
@@ -6331,7 +6375,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
                 </div>
                 <div class="text-right shrink-0">
                   <p data-exp-unit-lbl="${escapeHtml(c.id)}" class="text-sm font-extrabold text-[#1A2948]">${formatRM(unitPrice)}</p>
-                  <p class="text-[10px] text-[#4A6294]">/ pek</p>
+                  <p class="text-[10px] text-[#4A6294]">/ pcs</p>
                 </div>
               </div>
               ${moqRow}
@@ -6341,7 +6385,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
                 <button type="button" data-step-target=".exp-qty-input[data-exp-qty-id='${escapeHtml(c.id)}']" data-step-delta="1" class="w-10 h-10 rounded-xl bg-[#1A2948] hover:bg-[#283C68] text-white font-extrabold text-base flex items-center justify-center transition">+</button>
               </div>
               <div data-exp-bar="${escapeHtml(c.id)}" class="${qty > 0 ? '' : 'hidden'} bg-[#1A2948] text-white rounded-xl px-3 py-2 flex items-center justify-between text-xs font-bold">
-                <span data-exp-bar-lbl="${escapeHtml(c.id)}">Jumlah (${qty}×)</span>
+                <span data-exp-bar-lbl="${escapeHtml(c.id)}">Jumlah (${qty} pcs)</span>
                 <span data-exp-sub="${escapeHtml(c.id)}">${formatRM(sub)}</span>
               </div>
             </div>
@@ -6386,11 +6430,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       EXPENSES_CARDS.forEach(c => {
         const inp = document.querySelector(`.exp-qty-input[data-exp-qty-id="${c.id}"]`);
         const qty = inp ? Math.max(0, parseInt(inp.value, 10) || 0) : 0;
-        const moqIdx = expSelectedMoq[c.id] || 0;
-        const unitInp = document.querySelector(`.exp-unit-input[data-exp-unit-id="${c.id}"]`);
-        const unitPrice = c.moqOptions
-          ? c.moqOptions[moqIdx].price
-          : (c.fixedPrice !== undefined ? c.fixedPrice : (unitInp ? Math.max(0, parseFloat(unitInp.value) || 0) : (c.defaultUnitPrice || 0)));
+        const { unitPrice, activeIdx } = getExpenseTierInfo(c, qty);
         const sub = qty * unitPrice;
 
         const unitLbl = document.querySelector(`[data-exp-unit-lbl="${c.id}"]`);
@@ -6400,24 +6440,30 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         const barEl = document.querySelector(`[data-exp-bar="${c.id}"]`);
         if (barEl) barEl.classList.toggle('hidden', qty === 0);
         const barLbl = document.querySelector(`[data-exp-bar-lbl="${c.id}"]`);
-        if (barLbl) barLbl.textContent = `Jumlah (${qty}×)`;
+        if (barLbl) barLbl.textContent = `Jumlah (${qty} pcs)`;
         const cardEl = document.querySelector(`[data-card-exp="${c.id}"]`);
         if (cardEl) cardEl.classList.toggle('is-selected', qty > 0);
+        if (c.moqOptions) {
+          document.querySelectorAll(`[data-exp-moq-card="${c.id}"]`).forEach(b => {
+            const bIdx = parseInt(b.getAttribute('data-exp-moq-idx'), 10);
+            const isAct = qty > 0 ? bIdx === activeIdx : bIdx === (expSelectedMoq[c.id] || 0);
+            b.className = isAct
+              ? 'py-1.5 px-1 rounded-lg text-[10px] font-bold transition bg-[#1A2948] text-white'
+              : 'py-1.5 px-1 rounded-lg text-[10px] font-bold transition bg-[#EDF2FA] text-[#1A2948] hover:bg-[#DCE5F5]';
+          });
+        }
         const pkgItem = packagingInventory.find(pk => pk.id === c.id);
         const topBadgeEl = document.querySelector(`[data-exp-topbadge="${c.id}"]`);
         if (topBadgeEl && pkgItem) {
-          const packPcs = c.moqOptions ? (parseInt(c.moqOptions[moqIdx].label, 10) || 1) * qty : qty;
           const curPkg = Number(pkgItem.stock) || 0;
-          topBadgeEl.textContent = qty > 0 ? `Stok ${curPkg}→${curPkg + packPcs}` : `Stok ${curPkg}`;
+          topBadgeEl.textContent = qty > 0 ? `Stok ${curPkg}→${curPkg + qty}` : `Stok ${curPkg}`;
         }
         const badgeEl = document.querySelector(`[data-pill-badge-exp="${c.id}"]`);
         if (badgeEl) { badgeEl.textContent = qty; badgeEl.classList.toggle('hidden', qty === 0); }
 
         if (qty > 0 && sub > 0) {
           total += sub;
-          const packLbl = c.moqOptions ? ` (${c.moqOptions[moqIdx].label})` : '';
-          const packPcs = c.moqOptions ? (parseInt(c.moqOptions[moqIdx].label, 10) || 1) * qty : qty;
-          lines.push({ id: c.id, pcs: packPcs, desc: `${c.name}${packLbl} ×${qty}`, amount: sub });
+          lines.push({ id: c.id, pcs: qty, desc: `${c.name} ×${qty} pcs (${formatRM(unitPrice)}/pcs)`, amount: sub });
         }
       });
 
@@ -6440,7 +6486,6 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
           const cid = moqBtn.getAttribute('data-exp-moq-card');
           const idx = parseInt(moqBtn.getAttribute('data-exp-moq-idx'), 10) || 0;
           expSelectedMoq[cid] = idx;
-          renderExpensesCarousel();
           return;
         }
         const presetBtn = e.target.closest('[data-exp-preset]');
@@ -7690,6 +7735,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       'Semua Tarikh': 'All Dates',
       'No. Phone:': 'Phone:',
       'Lokasi:': 'Location:',
+      'Alamat / Lokasi:': 'Address / Location:',
+      'Edit Kenalan': 'Edit Contact',
       'Tarikh:': 'Date:',
       'Jumlah:': 'Total:',
       'Tiada rekod jualan dalam julat tarikh ini.': 'No sales records in this date range.',
@@ -8498,16 +8545,20 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         const wa = typeof extractPhoneAndWa === 'function' ? extractPhoneAndWa(c.contact || '') : { waUrl: '' };
         return `
           <div class="py-2.5">
-            <button type="button" data-prof-expand="${escapeHtml(c.id)}" class="w-full flex items-center justify-between gap-2 text-left py-1">
-              <span class="text-xs font-bold text-[#1A2948] truncate">${escapeHtml(c.name || '-')}</span>
-              <span class="text-xs font-semibold text-[#4A6294] shrink-0">${escapeHtml(c.contact || '-')}</span>
-            </button>
+            <div class="flex items-center justify-between gap-2 py-1">
+              <button type="button" data-prof-expand="${escapeHtml(c.id)}" class="min-w-0 flex-1 flex items-center justify-between gap-2 text-left">
+                <span class="text-xs font-bold text-[#1A2948] truncate">${escapeHtml(c.name || '-')}</span>
+                <span class="text-xs font-semibold text-[#4A6294] shrink-0">${escapeHtml(c.contact || '-')}</span>
+              </button>
+              <button type="button" data-prof-edit="${escapeHtml(c.id)}" class="shrink-0 text-[10px] font-bold bg-[#EDF2FA] hover:bg-[#DCE5F5] text-[#1A2948] px-2.5 py-1 rounded-full transition">Edit</button>
+            </div>
             ${isOpen ? `
               <div class="mt-2 p-3 rounded-2xl bg-[#F6F8FC] border border-[#E2E9F6] space-y-2 text-xs">
                 <p class="text-[#1A2948]"><span class="text-[#4A6294]">Peranan:</span> ${escapeHtml(c.role || '-')}</p>
                 <p class="text-[#1A2948]"><span class="text-[#4A6294]">Lokasi / Nota:</span> ${escapeHtml(c.note || '-')}</p>
                 <div class="flex items-center gap-2 pt-1">
                   ${wa.waUrl ? `<a href="${escapeHtml(wa.waUrl)}" target="_blank" rel="noopener noreferrer" class="text-[11px] font-semibold bg-[#1A2948] text-white px-2.5 py-1 rounded-lg">WhatsApp</a>` : ''}
+                  <button type="button" data-prof-edit="${escapeHtml(c.id)}" class="text-[11px] font-semibold bg-[#EDF2FA] text-[#1A2948] px-2.5 py-1 rounded-lg">Edit</button>
                   <button type="button" data-prof-del="${escapeHtml(c.id)}" class="text-[11px] font-semibold bg-white border border-[#DCE5F5] text-[#1A2948] px-2.5 py-1 rounded-lg">Padam</button>
                 </div>
               </div>
@@ -8525,9 +8576,30 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       });
     });
 
+    let editingProfContactId = null;
     const profContactListEl = document.getElementById('profContactList');
+    const profModalEl = document.getElementById('profQuickContactModal');
+    const profAddBtn = document.getElementById('profAddContactBtn');
+    const profCloseBtn = document.getElementById('closeProfContactModalBtn');
+
     if (profContactListEl) {
       profContactListEl.addEventListener('click', function (e) {
+        const editBtn = e.target.closest('[data-prof-edit]');
+        if (editBtn) {
+          const id = editBtn.getAttribute('data-prof-edit');
+          const c = contacts.find(x => x.id === id);
+          if (c && profModalEl) {
+            editingProfContactId = id;
+            const titleEl = profModalEl.querySelector('h3');
+            if (titleEl) titleEl.textContent = appLang === 'en' ? 'Edit Contact' : 'Edit Kenalan';
+            if (document.getElementById('profNewName')) document.getElementById('profNewName').value = c.name || '';
+            if (document.getElementById('profNewRole')) document.getElementById('profNewRole').value = c.role || 'Customer';
+            if (document.getElementById('profNewPhone')) document.getElementById('profNewPhone').value = c.contact || '';
+            if (document.getElementById('profNewNote')) document.getElementById('profNewNote').value = c.note || '';
+            profModalEl.classList.remove('hidden');
+          }
+          return;
+        }
         const delBtn = e.target.closest('[data-prof-del]');
         if (delBtn) {
           const id = delBtn.getAttribute('data-prof-del');
@@ -8546,11 +8618,14 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       });
     }
 
-    const profModalEl = document.getElementById('profQuickContactModal');
-    const profAddBtn = document.getElementById('profAddContactBtn');
-    const profCloseBtn = document.getElementById('closeProfContactModalBtn');
     if (profAddBtn && profModalEl) {
       profAddBtn.addEventListener('click', () => {
+        editingProfContactId = null;
+        const titleEl = profModalEl.querySelector('h3');
+        if (titleEl) titleEl.textContent = appLang === 'en' ? 'Add Contact' : 'Tambah Kenalan';
+        if (document.getElementById('profNewName')) document.getElementById('profNewName').value = '';
+        if (document.getElementById('profNewPhone')) document.getElementById('profNewPhone').value = '';
+        if (document.getElementById('profNewNote')) document.getElementById('profNewNote').value = '';
         const roleSel = document.getElementById('profNewRole');
         if (roleSel) roleSel.value = activeProfContactRole;
         profModalEl.classList.remove('hidden');
@@ -8589,7 +8664,18 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         const phone = (document.getElementById('profNewPhone') && document.getElementById('profNewPhone').value.trim()) || '';
         const note = (document.getElementById('profNewNote') && document.getElementById('profNewNote').value.trim()) || '';
         if (!name) { showToast('Sila isi nama.'); return; }
-        contacts.unshift({ id: 'c_' + Date.now(), name, role, contact: phone, note, photo: '' });
+        if (editingProfContactId) {
+          const existing = contacts.find(c => c.id === editingProfContactId);
+          if (existing) {
+            existing.name = name;
+            existing.role = role;
+            existing.contact = phone;
+            existing.note = note;
+          }
+          editingProfContactId = null;
+        } else {
+          contacts.unshift({ id: 'c_' + Date.now(), name, role, contact: phone, note, photo: '' });
+        }
         saveData(CONTACTS_STORAGE_KEY, contacts);
         activeProfContactRole = role;
         renderProfileContacts();
