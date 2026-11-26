@@ -4327,14 +4327,14 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
             `).join('');
       }
 
+      if (typeof renderDeliveryCard === 'function') renderDeliveryCard();
+      if (typeof renderUnifiedRecords === 'function') renderUnifiedRecords();
+
       const listEl = document.getElementById('financeList');
       if (salesRecords.length === 0) {
         listEl.innerHTML = `<div class="p-8 text-center text-sm text-[#4A6294]">Tiada rekod jualan dalam julat tarikh ini.</div>`;
         return;
       }
-
-      if (typeof renderDeliveryCard === 'function') renderDeliveryCard();
-      if (typeof renderUnifiedRecords === 'function') renderUnifiedRecords();
       listEl.innerHTML = salesRecords
         .map(row => {
           let detailsHtml = '';
