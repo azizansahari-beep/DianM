@@ -2900,6 +2900,38 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       ).join('');
     }
 
+
+    // Auto-apply any pending 'Dalam Penghantaran' restock orders into Stock units
+    (function autoApplyPendingRestocks() {
+      if (!Array.isArray(restockOrders) || restockOrders.length === 0) return;
+      let changed = false;
+      restockOrders.forEach(order => {
+        if (order && order.status === 'Dalam Penghantaran') {
+          Object.entries(order.items || {}).forEach(([pid, qty]) => {
+            const prod = inventory.find(item => item.id === pid);
+            const addQ = Number(qty) || 0;
+            if (prod && addQ > 0) {
+              const before = Number(prod.stock) || 0;
+              const unitCost = getUnitPriceForQty(prod, addQ, 'agent');
+              if (!Array.isArray(prod.costBatches)) prod.costBatches = [];
+              if (prod.costBatches.length === 0 && before > 0 && Number(prod.costPrice) > 0) {
+                prod.costBatches.push({ qty: before, costPrice: Number(prod.costPrice), date: '', source: 'Stok Asal' });
+              }
+              prod.costBatches.push({ qty: addQ, costPrice: unitCost, date: (order.date || '').slice(0, 10), source: 'Restock' });
+              prod.stock = before + addQ;
+              recordStockMovement(pid, 'Restock', addQ, before, prod.stock, `Restock (${order.deliveryMethod || 'COD'})`, order.date, unitCost);
+            }
+          });
+          order.status = 'Barang Sampai';
+          changed = true;
+        }
+      });
+      if (changed) {
+        saveData(INVENTORY_STORAGE_KEY, inventory);
+        saveData(RESTOCK_ORDERS_KEY, restockOrders);
+      }
+    })();
+
     function getPendingIncomingByProduct() {
       const incoming = {};
       restockOrders
@@ -3041,10 +3073,9 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
     function renderInventory() {
       const pendingIncomingByProd = getPendingIncomingByProduct();
-      const allItems = [...inventory, ...packagingInventory];
-      document.getElementById('invTotalProducts').textContent = allItems.length;
-      document.getElementById('invTotalUnits').textContent = allItems.reduce((sum, p) => sum + (Number(p.stock) || 0), 0);
-      document.getElementById('invLowStockCount').textContent = allItems.filter(p => Number(p.stock) <= Number(p.minStock)).length;
+      document.getElementById('invTotalProducts').textContent = inventory.length;
+      document.getElementById('invTotalUnits').textContent = inventory.reduce((sum, p) => sum + (Number(p.stock) || 0), 0);
+      document.getElementById('invLowStockCount').textContent = inventory.filter(p => Number(p.stock) <= Number(p.minStock)).length;
 
       const listEl = document.getElementById('inventoryList');
       listEl.innerHTML = inventory.map(p => buildStockRowHtml(p, false, pendingIncomingByProd[p.id] || 0)).join('');
