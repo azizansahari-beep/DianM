@@ -1498,17 +1498,20 @@
               <div>
                 <p class="text-slate-400 text-[11px]">No. Telefon / WhatsApp</p>
                 <p id="lockedPhone" class="font-semibold text-slate-800">-</p>
-                <a id="lockedWaLink" href="#" target="_blank" rel="noopener noreferrer" class="hidden inline-block mt-0.5 text-[11px] font-semibold text-[#1A2948] underline break-all"></a>
+                <div class="flex flex-wrap items-center gap-1.5 mt-1.5">
+                  <a id="lockedWaLink" href="#" target="_blank" rel="noopener noreferrer" class="hidden inline-flex items-center gap-1 bg-[#1A2948] hover:bg-[#283C68] text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg transition">Chat WhatsApp</a>
+                  <button id="lockedEditPhoneBtn" type="button" class="inline-flex items-center gap-1 bg-[#EDF2FA] hover:bg-[#DCE5F5] text-[#1A2948] text-[10px] font-bold px-2.5 py-1.5 rounded-lg transition">Edit No.</button>
+                </div>
               </div>
             </div>
             <div class="pt-2.5 border-t border-slate-200">
               <p class="text-slate-400 text-[11px]">Pautan Pengesahan QR HQ</p>
               <div class="flex items-center justify-between gap-2 mt-1">
-                <p id="lockedQrCode" class="font-medium text-[#1A2948] break-all flex-1">-</p>
+                <a id="lockedQrCode" href="#" target="_blank" rel="noopener noreferrer" class="font-medium text-[#1A2948] underline break-all flex-1">-</a>
                 <button
                   id="shareQrLinkBtn"
                   type="button"
-                  class="shrink-0 bg-[#1A2948] hover:bg-[#1A2948] text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg transition"
+                  class="shrink-0 bg-[#1A2948] hover:bg-[#283C68] text-white text-[11px] font-semibold px-3 py-1.5 rounded-lg transition"
                 >
                   Share
                 </button>
@@ -2347,7 +2350,7 @@ function doPost(e) {
       }
       if (skipCloudPush) return;
       try {
-        if (localStorage.getItem(CLOUD_AUTO_KEY) === 'true' && localStorage.getItem(CLOUD_URL_KEY)) {
+        if (localStorage.getItem(CLOUD_AUTO_KEY) === 'true' && (localStorage.getItem(CLOUD_URL_KEY) || DEFAULT_CLOUD_URL)) {
           clearTimeout(cloudSyncTimer);
           cloudSyncTimer = setTimeout(() => pushToCloud(true), 1200);
         }
@@ -2743,16 +2746,50 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       saveData(INVENTORY_STORAGE_KEY, inventory);
     }
 
-    function restoreInventoryForItems(items) {
+    function restoreInventoryForItems(items, reasonLabel) {
       (items || []).forEach(item => {
         Object.entries(item.deduct || {}).forEach(([prodId, qty]) => {
           const prod = inventory.find(p => p.id === prodId);
-          if (prod) {
-            prod.stock = (Number(prod.stock) || 0) + (Number(qty) || 0);
+          const addQ = Number(qty) || 0;
+          if (prod && addQ > 0) {
+            const before = Number(prod.stock) || 0;
+            prod.stock = before + addQ;
+            if (Array.isArray(prod.costBatches)) {
+              if (prod.costBatches.length > 0) {
+                prod.costBatches[0].qty = (Number(prod.costBatches[0].qty) || 0) + addQ;
+              } else if (Number(prod.costPrice) > 0) {
+                prod.costBatches.push({ qty: addQ, costPrice: Number(prod.costPrice), date: '', source: 'Stok Asal' });
+              }
+            }
+            recordStockMovement(prodId, 'Batal Order', addQ, before, prod.stock, reasonLabel || 'Batal / Padam Order');
           }
         });
       });
       saveData(INVENTORY_STORAGE_KEY, inventory);
+    }
+
+    function restoreOrderStockAndPkg(inv, reasonLabel) {
+      if (!inv || !inv.stockDeducted) return;
+      restoreInventoryForItems(inv.items, reasonLabel || `Batal ${inv.id}`);
+      if (inv.pkgDeduct) {
+        let pkgChanged = false;
+        Object.entries(inv.pkgDeduct).forEach(([pkgId, q]) => {
+          const addP = Number(q) || 0;
+          if (addP > 0) {
+            const pkg = packagingInventory.find(pk => pk.id === pkgId);
+            if (pkg) {
+              const before = Number(pkg.stock) || 0;
+              pkg.stock = before + addP;
+              recordStockMovement(pkg.id, 'Batal Order', addP, before, pkg.stock, reasonLabel || `Batal ${inv.id} (Packaging)`);
+              pkgChanged = true;
+            }
+          }
+        });
+        if (pkgChanged) {
+          saveData(PACKAGING_STORAGE_KEY, packagingInventory);
+          if (typeof renderExpensesCarousel === 'function') renderExpensesCarousel();
+        }
+      }
     }
 
     function buildWhatsAppText(inv) {
@@ -3088,43 +3125,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       if (typeof translateVisibleUi === 'function') translateVisibleUi(appLang);
     }
 
-    function renderPriceMasterSets() {
-      document.getElementById('retailSetsList').innerHTML = RETAIL_SETS.map(
-        s => `
-          <li class="bg-white rounded-md p-2.5 border border-[#E2E9F6]">
-            <div class="flex justify-between items-center font-semibold text-[#1A2948]">
-              <span>${escapeHtml(s.name)}</span>
-              <span class="text-[#1A2948]">${formatRM(s.price)}</span>
-            </div>
-            <p class="text-[#4A6294] mt-0.5">${escapeHtml(s.items)}</p>
-          </li>
-        `
-      ).join('');
 
-      document.getElementById('agentSetsList').innerHTML = AGENT_SETS.map(
-        s => `
-          <li class="bg-white rounded-md p-2.5 border border-[#E2E9F6]">
-            <div class="flex justify-between items-center font-semibold text-[#1A2948]">
-              <span>${escapeHtml(s.name)}</span>
-              <span class="text-[#1A2948]">${formatRM(s.baseTotal)}</span>
-            </div>
-            <p class="text-[#4A6294] mt-0.5">${escapeHtml(s.detail)}</p>
-          </li>
-        `
-      ).join('');
-    }
-
-    function getPendingIncomingByProduct() {
-      const incoming = {};
-      restockOrders
-        .filter(o => o.status === 'Dalam Penghantaran')
-        .forEach(o => {
-          Object.entries(o.items || {}).forEach(([pid, qty]) => {
-            incoming[pid] = (incoming[pid] || 0) + (Number(qty) || 0);
-          });
-        });
-      return incoming;
-    }
 
     function renderInvoiceBuilderOptions() {
       if (typeof renderContactDropdowns === 'function') renderContactDropdowns();
@@ -3235,6 +3236,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
           `;
         })
         .join('');
+      if (typeof renderDeliveryCard === 'function') renderDeliveryCard();
     }
 
     function renderTasks() {
@@ -3884,7 +3886,11 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       const finalContactRole = contact ? contact.role : roleForNew;
       const docType = isDraft ? 'Sebut Harga' : 'Invois';
       const prefix = isDraft ? 'QT' : 'INV';
-      const num = 1001 + invoices.length;
+      const maxInvNum = invoices.reduce((mx, inv) => {
+        const m = String((inv && inv.id) || '').match(/(\d+)$/);
+        return m ? Math.max(mx, parseInt(m[1], 10)) : mx;
+      }, 1000);
+      const num = Math.max(1001 + invoices.length, maxInvNum + 1);
       const today = (document.getElementById('salesOrderDate') && document.getElementById('salesOrderDate').value) || new Date().toISOString().slice(0, 10);
 
       const photoFile = null;
@@ -5212,6 +5218,9 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         renderRestockPlan,
         renderFinance,
         renderExpensesCarousel,
+        renderUnifiedRecords,
+        renderProfileContacts,
+        renderDeliveryCard,
         renderKb
       ].forEach(fn => {
         try { if (typeof fn === 'function') fn(); } catch (err) { console.error(err); }
@@ -5779,9 +5788,16 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         const inv = invoices.find(i => i.id === id);
         if (inv) {
           inv.status = inv.status === 'Dibayar' ? 'Belum Bayar' : 'Dibayar';
+          if (inv.status === 'Dibayar') inv.deliveryArchived = false;
           saveData(INVOICES_STORAGE_KEY, invoices);
           renderInvoices();
           renderFinance();
+          if (typeof renderDeliveryCard === 'function') renderDeliveryCard();
+          if (typeof renderUnifiedRecords === 'function') renderUnifiedRecords();
+          if (typeof renderDashboard === 'function') renderDashboard();
+          if (inv.status === 'Dibayar') {
+            showToast(appLang === 'en' ? 'Payment confirmed! Added to Delivery.' : 'Bayaran disahkan! Dimasukkan ke Penghantaran.');
+          }
         }
         return;
       }
@@ -5802,12 +5818,15 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         const id = delBtn.getAttribute('data-delete-inv');
         const target = invoices.find(i => i.id === id);
         requestDeleteConfirm(`Padam rekod ${target ? target.id : id}?`, function () {
-          if (target && target.status === 'Draf (Tunggu Pengesahan)' && target.stockDeducted) {
-            restoreInventoryForItems(target.items);
+          if (target && target.stockDeducted) {
+            restoreOrderStockAndPkg(target, `Batal / Padam ${target.id}`);
           }
           invoices = invoices.filter(i => i.id !== id);
           saveData(INVOICES_STORAGE_KEY, invoices);
           renderInventory();
+          renderSalesOrderGrids();
+          renderManualLooseGrid();
+          renderRestockSetOrderGrid();
           renderInvoices();
           renderFinance();
           renderDashboard();
@@ -6135,12 +6154,19 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         const id = delInv.getAttribute('data-delete-inv');
         const target = invoices.find(i => i.id === id);
         requestDeleteConfirm(`Padam invois jualan ${target ? target.id : id}?`, function () {
+          if (target && target.stockDeducted) {
+            restoreOrderStockAndPkg(target, `Batal / Padam ${target.id}`);
+          }
           invoices = invoices.filter(i => i.id !== id);
           saveData(INVOICES_STORAGE_KEY, invoices);
+          renderInventory();
+          renderSalesOrderGrids();
+          renderManualLooseGrid();
+          renderRestockSetOrderGrid();
           renderInvoices();
           renderFinance();
           renderDashboard();
-          showToast('Rekod jualan dipadam!');
+          showToast('Rekod jualan dipadam & stok dipulangkan!');
         });
       }
     });
@@ -6533,6 +6559,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
           const cid = moqBtn.getAttribute('data-exp-moq-card');
           const idx = parseInt(moqBtn.getAttribute('data-exp-moq-idx'), 10) || 0;
           expSelectedMoq[cid] = idx;
+          updateExpensesTotals();
           return;
         }
         const presetBtn = e.target.closest('[data-exp-preset]');
@@ -6639,6 +6666,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       const c = contacts.find(item => item.id === btn.getAttribute('data-pick-contact'));
       if (!c) return;
       document.getElementById('salesContactInput').value = c.name;
+      const phoneEl = document.getElementById('salesContactPhone');
+      if (phoneEl) phoneEl.value = c.contact || '';
       this.classList.add('hidden');
       setSalesMode(c.role === 'Agent/Stockist' ? 'agent' : 'retail');
     });
@@ -6870,7 +6899,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       if (changed) saveData(PACKAGING_STORAGE_KEY, packagingInventory);
     })();
     kbItems = loadData(KB_STORAGE_KEY, DEFAULT_KB);
-      kbItems = DEFAULT_KB.map(d => ({ ...d }));
+    if (!Array.isArray(kbItems) || kbItems.length === 0) kbItems = DEFAULT_KB.map(d => ({ ...d }));
     document.querySelectorAll('.bottom-nav-btn[data-quick-tab]').forEach(btn => {
       btn.addEventListener('click', function () {
         switchTab(this.getAttribute('data-quick-tab'));
@@ -6969,7 +6998,8 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         saveData(FEEDBACKS_KEY, feedbacks);
         renderDashboard();
         formEl.reset();
-        formEl.classList.add('hidden');
+        const fbSheet = document.getElementById('dashFeedbackSheet');
+        if (fbSheet) fbSheet.classList.add('hidden');
         showToast('Feedback pelanggan disimpan!');
       };
       reader.readAsDataURL(file);
@@ -7117,21 +7147,46 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         document.getElementById('lockedRank').textContent = agentProfile.rank || '-';
         document.getElementById('lockedLocation').textContent = agentProfile.location || '-';
         document.getElementById('lockedSince').textContent = agentProfile.since || '-';
-        const profileWa = extractPhoneAndWa((agentProfile.phone || '') + '\n' + (agentProfile.qrCode || ''));
+        const profileWa = extractPhoneAndWa((agentProfile.phone || '') + '\n' + (agentProfile.waUrl || '') + '\n' + (agentProfile.qrCode || ''));
         const displayPhone = agentProfile.phone || profileWa.phone || '-';
+        const finalWaUrl = agentProfile.waUrl || profileWa.waUrl || '';
         const lockedPhoneEl = document.getElementById('lockedPhone');
         if (lockedPhoneEl) lockedPhoneEl.textContent = displayPhone;
         const lockedWaEl = document.getElementById('lockedWaLink');
         if (lockedWaEl) {
-          if (profileWa.waUrl) {
-            lockedWaEl.href = profileWa.waUrl;
-            lockedWaEl.textContent = profileWa.waUrl;
+          if (finalWaUrl) {
+            lockedWaEl.href = finalWaUrl;
+            lockedWaEl.textContent = 'Chat WhatsApp';
             lockedWaEl.classList.remove('hidden');
           } else {
             lockedWaEl.classList.add('hidden');
           }
         }
-        document.getElementById('lockedQrCode').textContent = agentProfile.qrCode || '-';
+        if (!displayPhone || displayPhone === '-') {
+          if (/^https?:\/\//i.test(agentProfile.qrCode || '') && !window.__autoFetchedQrPhone) {
+            window.__autoFetchedQrPhone = true;
+            fetchWaFromQrUrl(agentProfile.qrCode).then(webWa => {
+              if (webWa && (webWa.phone || webWa.waUrl)) {
+                if (webWa.phone) agentProfile.phone = webWa.phone;
+                if (webWa.waUrl) agentProfile.waUrl = webWa.waUrl;
+                saveData(PROFILE_STORAGE_KEY, agentProfile, true);
+                applyAgentProfile();
+              }
+            });
+          }
+        }
+        const lockedQrEl = document.getElementById('lockedQrCode');
+        if (lockedQrEl) {
+          const qrVal = agentProfile.qrCode || '';
+          lockedQrEl.textContent = qrVal || '-';
+          if (/^https?:\/\//i.test(qrVal)) {
+            lockedQrEl.href = qrVal;
+            lockedQrEl.classList.remove('pointer-events-none', 'no-underline');
+          } else {
+            lockedQrEl.removeAttribute('href');
+            lockedQrEl.classList.add('pointer-events-none', 'no-underline');
+          }
+        }
 
         if (agentProfile.ecardImg) {
           document.getElementById('lockedEcardImg').src = agentProfile.ecardImg;
@@ -7148,13 +7203,13 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     }
 
     function extractPhoneAndWa(rawStr) {
-      const text = String(rawStr || '');
+      const text = String(rawStr || '').replace(/\\\//g, '/').replace(/\\u002F/gi, '/');
       let phone = '';
       let waUrl = '';
 
-      // 1. Check explicit WhatsApp URLs (wa.me, api.whatsapp.com, wasap.my)
-      const waLinkMatch = text.match(/https?:\/\/(?:wa\.me\/|api\.whatsapp\.com\/send\?(?:[^\s#]*&)?phone=|wasap\.my\/)(\+?\d{8,15})/i)
-        || text.match(/(?:wa\.me\/|wasap\.my\/|phone=|tel:)(\+?\d{8,15})/i);
+      // 1. Check explicit WhatsApp URLs (wa.me, api.whatsapp.com, whatsapp://, wasap.my)
+      const waLinkMatch = text.match(/(?:https?:\/\/(?:wa\.me\/|api\.whatsapp\.com\/send\?(?:[^\s#"']*&)??phone=|wasap\.my\/)|whatsapp:\/\/send\?(?:[^\s#"']*&)??phone=)(\+?[\d\s-]{8,18})/i)
+        || text.match(/(?:wa\.me\/|wasap\.my\/|phone=|tel:)(\+?[\d\s-]{8,18})/i);
       if (waLinkMatch && waLinkMatch[1]) {
         let digits = waLinkMatch[1].replace(/\D/g, '');
         if (digits.startsWith('0')) digits = '60' + digits.slice(1);
@@ -7173,6 +7228,34 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         }
       }
       return { phone, waUrl };
+    }
+
+    async function fetchWaFromQrUrl(qrUrl) {
+      if (!qrUrl || !/^https?:\/\//i.test(qrUrl)) return { phone: '', waUrl: '' };
+      const tryFetchUrl = async targetUrl => {
+        const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+        const timer = ctrl ? setTimeout(() => ctrl.abort(), 5000) : null;
+        try {
+          const resp = await fetch(targetUrl, ctrl ? { signal: ctrl.signal } : {});
+          if (resp && resp.ok) return await resp.text();
+        } catch (e) {}
+        finally { if (timer) clearTimeout(timer); }
+        return '';
+      };
+      const candidates = [
+        qrUrl,
+        'https://r.jina.ai/' + qrUrl,
+        'https://api.allorigins.win/raw?url=' + encodeURIComponent(qrUrl),
+        'https://corsproxy.io/?' + encodeURIComponent(qrUrl)
+      ];
+      for (const u of candidates) {
+        const pageHtml = await tryFetchUrl(u);
+        if (pageHtml) {
+          const webWa = extractPhoneAndWa(pageHtml);
+          if (webWa.phone || webWa.waUrl) return webWa;
+        }
+      }
+      return { phone: '', waUrl: '' };
     }
 
     async function scanEcardImage(img) {
@@ -7228,26 +7311,10 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       }
 
       const parsed = parseEcardOcrText(rawOcrText, qrData);
-      if (!parsed.phone && qrData && /^https?:\/\//i.test(qrData)) {
-        const tryFetchUrl = async targetUrl => {
-          const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-          const timer = ctrl ? setTimeout(() => ctrl.abort(), 4500) : null;
-          try {
-            const resp = await fetch(targetUrl, ctrl ? { signal: ctrl.signal } : {});
-            if (resp && resp.ok) return await resp.text();
-          } catch (e) {}
-          finally { if (timer) clearTimeout(timer); }
-          return '';
-        };
-        let pageHtml = await tryFetchUrl(qrData);
-        if (!pageHtml) {
-          pageHtml = await tryFetchUrl('https://api.allorigins.win/raw?url=' + encodeURIComponent(qrData));
-        }
-        if (pageHtml) {
-          const webWa = extractPhoneAndWa(pageHtml);
-          if (webWa.phone) parsed.phone = webWa.phone;
-          if (webWa.waUrl) parsed.waUrl = webWa.waUrl;
-        }
+      if ((!parsed.phone || !parsed.waUrl) && qrData && /^https?:\/\//i.test(qrData)) {
+        const webWa = await fetchWaFromQrUrl(qrData);
+        if (!parsed.phone && webWa.phone) parsed.phone = webWa.phone;
+        if (!parsed.waUrl && webWa.waUrl) parsed.waUrl = webWa.waUrl;
       }
       return { ...parsed, qrData, photo };
     }
@@ -7333,57 +7400,15 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
 
         const img = new Image();
         img.onload = async function () {
-          const canvas = document.createElement('canvas');
-          canvas.width = img.width;
-          canvas.height = img.height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0);
-
-          try {
-            const pCanvas = document.createElement('canvas');
-            const sx = Math.floor(img.width * 0.27);
-            const sy = Math.floor(img.height * 0.16);
-            const sw = Math.floor(img.width * 0.46);
-            const sh = Math.floor(img.height * 0.40);
-            pCanvas.width = sw;
-            pCanvas.height = sh;
-            pCanvas.getContext('2d').drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
-            agentProfile.photo = pCanvas.toDataURL('image/jpeg', 0.9);
-          } catch (err) {}
-
-          let qrData = '';
-          if (typeof jsQR === 'function') {
-            let imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            let qr = jsQR(imgData.data, imgData.width, imgData.height);
-            if (!qr) {
-              const qy = Math.floor(img.height * 0.65);
-              const qw = Math.floor(img.width * 0.45);
-              imgData = ctx.getImageData(0, qy, qw, img.height - qy);
-              qr = jsQR(imgData.data, imgData.width, imgData.height);
-            }
-            if (qr && qr.data) qrData = qr.data;
-          }
-
-          let ocrParsed = {};
-          if (typeof Tesseract !== 'undefined') {
-            try {
-              const tCanvas = document.createElement('canvas');
-              const ty = Math.floor(img.height * 0.48);
-              const th = Math.floor(img.height * 0.29);
-              tCanvas.width = img.width;
-              tCanvas.height = th;
-              tCanvas.getContext('2d').drawImage(img, 0, ty, img.width, th, 0, 0, img.width, th);
-              const res = await Tesseract.recognize(tCanvas, 'eng');
-              ocrParsed = parseEcardOcrText(res.data.text || '', qrData);
-            } catch (err) {}
-          } else {
-            ocrParsed = parseEcardOcrText('', qrData);
-          }
+          const ocrParsed = await scanEcardImage(img);
+          const qrData = ocrParsed.qrData || '';
+          if (ocrParsed.photo) agentProfile.photo = ocrParsed.photo;
 
           agentProfile = {
             name: ocrParsed.name || agentProfile.name,
             handle: ocrParsed.handle || agentProfile.handle,
             phone: ocrParsed.phone || agentProfile.phone,
+            waUrl: ocrParsed.waUrl || agentProfile.waUrl || '',
             agentId: ocrParsed.agentId || agentProfile.agentId,
             rank: ocrParsed.rank || agentProfile.rank,
             location: ocrParsed.location || agentProfile.location,
@@ -7448,8 +7473,19 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
             agentProfile.qrCode = code.data;
             const idm = code.data.match(/AINAA-\d+/i);
             if (idm) agentProfile.agentId = idm[0].toUpperCase();
-            const phm = code.data.match(/(?:phone=|tel:|wa\.me\/)?((?:\+?60|0)1\d[\s-]?\d{3,4}[\s-]?\d{4})/i);
-            if (phm) agentProfile.phone = phm[1].trim();
+            const directWa = extractPhoneAndWa(code.data);
+            if (directWa.phone) agentProfile.phone = directWa.phone;
+            if (directWa.waUrl) agentProfile.waUrl = directWa.waUrl;
+            if ((!agentProfile.phone || !agentProfile.waUrl) && /^https?:\/\//i.test(code.data)) {
+              statusEl.classList.remove('hidden');
+              statusEl.textContent = 'QR dikesan! Sedang menarik no. telefon & pautan WhatsApp daripada kad web...';
+              fetchWaFromQrUrl(code.data).then(webWa => {
+                if (webWa.phone && !agentProfile.phone) agentProfile.phone = webWa.phone;
+                if (webWa.waUrl && !agentProfile.waUrl) agentProfile.waUrl = webWa.waUrl;
+                saveData(PROFILE_STORAGE_KEY, agentProfile, true);
+                applyAgentProfile();
+              });
+            }
             agentProfile.registered = true;
             saveData(PROFILE_STORAGE_KEY, agentProfile, true);
             applyAgentProfile();
@@ -7499,6 +7535,21 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
       logDiaryActivity('E-Card', 'Profil E-Card telah dipadam daripada peranti.', '');
       showToast('Profil dipadam. Semua data perniagaan anda kekal disimpan.');
     });
+
+    const editPhoneBtn = document.getElementById('lockedEditPhoneBtn');
+    if (editPhoneBtn) {
+      editPhoneBtn.addEventListener('click', function () {
+        const cur = agentProfile.phone || '';
+        const val = prompt('Masukkan No. Telefon / WhatsApp (cth: 013-8824410):', cur);
+        if (val === null) return;
+        const parsed = extractPhoneAndWa(val.trim());
+        agentProfile.phone = parsed.phone || val.trim();
+        if (parsed.waUrl) agentProfile.waUrl = parsed.waUrl;
+        saveData(PROFILE_STORAGE_KEY, agentProfile, true);
+        applyAgentProfile();
+        showToast('No. Telefon / WhatsApp dikemas kini!');
+      });
+    }
 
     // Share QR Verification Link
     document.getElementById('shareQrLinkBtn').addEventListener('click', async function () {
@@ -7609,10 +7660,19 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
           const cloudInv = data.inventory.filter(p => p && p.id !== 'scrub' && (p.name || '').toLowerCase() !== 'scrub');
           inventory = DEFAULT_INVENTORY.map(def => {
             const saved = cloudInv.find(s => s.id === def.id);
-            return saved ? Object.assign({}, def, { stock: Number(saved.stock ?? def.stock), minStock: Number(saved.minStock ?? def.minStock) }) : JSON.parse(JSON.stringify(def));
+            if (!saved) return JSON.parse(JSON.stringify(def));
+            const merged = Object.assign({}, def, {
+              stock: Number(saved.stock ?? def.stock),
+              minStock: Number(saved.minStock ?? def.minStock)
+            });
+            if (saved.costPrice !== undefined) merged.costPrice = Number(saved.costPrice) || 0;
+            if (Array.isArray(saved.costBatches)) merged.costBatches = saved.costBatches;
+            return merged;
           });
           saveData(INVENTORY_STORAGE_KEY, inventory, true);
         }
+        if (Array.isArray(data.packagingInventory)) { packagingInventory = data.packagingInventory; saveData(PACKAGING_STORAGE_KEY, packagingInventory, true); }
+        if (Array.isArray(data.stockLogs)) { stockLogs = data.stockLogs; saveData(STOCK_LOGS_KEY, stockLogs, true); }
         if (Array.isArray(data.invoices)) { invoices = data.invoices; saveData(INVOICES_STORAGE_KEY, invoices, true); }
         if (Array.isArray(data.restockOrders)) { restockOrders = data.restockOrders; saveData(RESTOCK_ORDERS_KEY, restockOrders, true); }
         if (Array.isArray(data.tasks)) { tasks = data.tasks; saveData(TASKS_STORAGE_KEY, tasks, true); }
@@ -8479,7 +8539,7 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
         const nextTab = MAIN_SWIPE_TABS[nextIdx];
         switchTab(nextTab);
         setBottomNavCollapsed(false);
-        const tabEl = document.getElementById('tab-' + nextTab);
+        const tabEl = document.getElementById('tab-' + activeTab);
         if (tabEl) {
           tabEl.classList.remove('animate-fade-up');
           void tabEl.offsetWidth;
@@ -8577,10 +8637,11 @@ document.querySelectorAll('.tab-btn').forEach(btn => {
     // E-Card onboarding at app launch disabled; user can register optionally in Profil & E-Kad.
 
     // ==================== PROFILE CONTACTS (CUSTOMER | AGENT | +) ====================
-    let activeProfContactRole = 'Customer';
-    let expandedProfContactId = null;
+    var activeProfContactRole = typeof activeProfContactRole !== 'undefined' ? activeProfContactRole : 'Customer';
+    var expandedProfContactId = typeof expandedProfContactId !== 'undefined' ? expandedProfContactId : null;
 
     function renderProfileContacts() {
+      if (typeof activeProfContactRole === 'undefined' || !activeProfContactRole) activeProfContactRole = 'Customer';
       const listEl = document.getElementById('profContactList');
       if (!listEl) return;
       document.querySelectorAll('.prof-contact-tab').forEach(btn => {
